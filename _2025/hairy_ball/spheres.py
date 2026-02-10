@@ -1,4 +1,4 @@
-from manimlib import *
+from manim_imports_ext import *
 import numpy as np
 
 
@@ -159,6 +159,54 @@ class SphereStreamLines(StreamLines):
 
 
 # Scenes
+
+
+class TeddyHeadSwirl(InteractiveScene):
+    def construct(self):
+        img = ImageMobject("TeddyHead")
+        img.set_height(FRAME_HEIGHT)
+        img.fix_in_frame()
+        # self.add(img)
+
+        # Add sphere
+        frame = self.frame
+        axes = ThreeDAxes()
+
+        def v_func(points):
+            perp = np.cross(points, OUT)
+            alt_perp = np.cross(points, perp)
+            return 0.4 * (perp + alt_perp)
+
+        top_sample_points = np.array([
+            point for point in fibonacci_sphere(10_000) if point[2] > 0.95
+        ])
+        full_sample_points = fibonacci_sphere(1000)
+
+        top_lines, full_lines = lines = VGroup(*(
+            SphereStreamLines(
+                v_func,
+                axes,
+                sample_coords=samples,
+                arc_len=0.25,
+                dt=0.05,
+                max_time_steps=10,
+            )
+            for samples in [top_sample_points, full_sample_points]
+        ))
+        lines.set_stroke(WHITE, 2, 0.7)
+        full_lines.set_stroke(WHITE, 2, 0.7)
+        top_animated_lines = AnimatedStreamLines(top_lines)
+        full_animated_lines = AnimatedStreamLines(full_lines)
+
+        frame.reorient(-50, 12, 0, (0.15, -0.04, 0.0), 3.09)
+        self.add(top_animated_lines)
+        self.wait(4)
+        self.add(full_animated_lines)
+        self.play(
+            frame.animate.reorient(-39, 75, 0),
+            run_time=6
+        )
+
 
 class IntroduceVectorField(InteractiveScene):
     def construct(self):
@@ -413,11 +461,6 @@ class IntroduceVectorField(InteractiveScene):
         self.wait(3)
 
 
-class ShowEastwardDirection(InteractiveScene):
-    def construct(self):
-        pass
-
-
 class StereographicProjection(InteractiveScene):
     def construct(self):
         # Set up
@@ -604,38 +647,83 @@ class StereographicProjection(InteractiveScene):
         # For an insertion
         frame.clear_updaters()
         frame.reorient(-18, 77, 0, (-0.04, 0.04, 0.09), 5.43)
+        frame.clear_updaters()
         frame.add_ambient_rotation(1 * DEG)
         sphere.set_clip_plane(UP, 2)
         sphere.set_color(GREY_D, 0.5)
         xy_field.apply_depth_test()
         xy_field.set_stroke(opacity=0.)
-        proj_lines.set_stroke(opacity=0.35)
-        self.add(xy_field, proj_lines, sphere, mesh)
+        proj_lines.set_stroke(opacity=0)
+        proj_plane.axes.set_stroke(width=1, opacity=0.5)
+        self.clear()
+        sphere.scale(0.99)
+        self.add(axes, xy_field, proj_lines, sphere, plane, frame)
 
-        # Stream lines
-        proto_stream_lines = VGroup(
-            Line([x, y, 0], [x + 2, y, 0]).insert_n_curves(25)
-            for x in np.arange(-x_max, x_max, 1)
-            for y in np.arange(-x_max, x_max, 0.5)
+        # Particles
+        n_samples = 50_000
+        x_max = axes.x_range[1]
+        sample_points = np.random.uniform(-x_max, x_max, (n_samples, 3))
+        sample_points[:, 2] = 0
+        particles = DotCloud(sample_points)
+        particles.set_radius(0.015)
+        particles.set_color(BLUE)
+        particles.make_3d()
+
+        particle_opacity_tracker = ValueTracker(1)
+        proj_particle_radius_tracker = ValueTracker(0.01)
+
+        proj_particles = particles.copy()
+        proj_particles.set_opacity(1)
+
+        x_vel = 0.5
+
+        def update_particles(particles, dt):
+            particles.shift(dt * x_vel * RIGHT)
+            points = particles.get_points()
+            points[points[:, 0] > x_max, 0] -= 2 * x_max
+            particles.set_points(points)
+            particles.set_opacity(particle_opacity_tracker.get_value())
+
+            sphere_points = inv_streographic_proj(points[:, :2])
+            zs = sphere_points[:, 2]
+            proj_particles.set_points(sphere_points)
+            proj_particles.set_radius((proj_particle_radius_tracker.get_value() * (1.5 - zs)).reshape(-1, 1))
+
+        particles.add_updater(update_particles)
+        self.add(particles, sphere)
+        self.wait(7)
+
+        # Project
+        moving_particles = particles.copy()
+        moving_particles_opacity_tracker = ValueTracker(0)
+        moving_particles.add_updater(lambda m: m.set_opacity(moving_particles_opacity_tracker.get_value()))
+
+        field = get_sphereical_vector_field(
+            lambda p3d: stereographic_vector_field(p3d, right_func),
+            axes,
+            fibonacci_sphere(1000),
+            stroke_width=0.5
         )
-        for line in proto_stream_lines:
-            line.virtual_time = 1
-        proto_stream_lines.set_stroke(WHITE, 2, 0.8)
+        field.set_stroke(WHITE, opacity=0.5)
 
-        sphere_stream_lines = proto_stream_lines.copy()
-        sphere_stream_lines.apply_points_function(lambda p: inv_streographic_proj(p[:, :2]), about_point=ORIGIN)
-        sphere_stream_lines.scale(1.01)
-        sphere_stream_lines.make_smooth()
+        self.play(proj_lines.animate.set_opacity(0.4))
+        self.play(
+            particle_opacity_tracker.animate.set_value(0.15),
+            Transform(moving_particles, proj_particles),
+            moving_particles_opacity_tracker.animate.set_value(1),
+            run_time=5
+        )
+        self.remove(moving_particles)
+        self.add(sphere, particles, proj_particles)
+        self.play(
+            proj_lines.animate.set_opacity(0.1),
+            frame.animate.reorient(-30, 29, 0, ORIGIN, 3.0),
+            proj_particle_radius_tracker.animate.set_value(0.0075),
+            FadeIn(field),
+            run_time=3
+        )
+        self.wait(15)
 
-        animated_plane_lines = AnimatedStreamLines(proto_stream_lines, rate_multiple=0.2)
-        animated_sphere_lines = AnimatedStreamLines(sphere_stream_lines, rate_multiple=0.2)
-
-        self.add(animated_plane_lines)
-        self.wait(3)
-        for n in range(3 * 30):
-            animated_sphere_lines.update(1 / 30)
-        self.play(TransformFromCopy(animated_plane_lines, animated_sphere_lines), run_time=3)
-        self.wait(5)
 
     def old(self):
         earth = TexturedSurface(sphere, "EarthTextureMap")
@@ -768,7 +856,268 @@ class SingleNullPointHairyBallRevealed(SingleNullPointHairyBall):
 
 class PairsOfNullPoints(InteractiveScene):
     def construct(self):
-        pass
+        # Set up
+        frame = self.frame
+        radius = 3
+        sphere_scale = 0.99
+        axis_range = (-4, 4)
+
+        sphere = Sphere(radius=sphere_scale * radius)
+        sphere.set_color(GREY_D, 0.5)
+        sphere.always_sort_to_camera(self.camera)
+        axes = ThreeDAxes(axis_range, axis_range, axis_range)
+        axes.scale(radius)
+
+        frame.reorient(-155, 74, 0)
+        self.add(axes, sphere)
+
+        # Vector field
+        def source_and_sink(points2d, offset=-3):
+            x, y = points2d.T
+            return np.array([x - offset, y]).T
+
+        def twirl_func(points2d, offset=-3):
+            x, y = points2d.T
+            return np.array([-y, x - offset]).T
+
+        rotation = np.identity(3)[:, [0, 2, 1]]
+
+        field = self.get_spherical_field(axes, twirl_func, rotation=rotation)
+        offset_tracker = ValueTracker(-1)
+
+        self.add(sphere, field)
+        frame.reorient(-136, 77, 0, (0.91, 0.31, 0.79), 12.58)
+        self.play(
+            frame.animate.reorient(-177, 80, 0, (0.0, 0.0, 0.0), 8),
+            run_time=4
+        )
+        frame.add_ambient_rotation(1 * DEG)
+
+        # Change the field around
+        new_params = [
+            (rotation_matrix_transpose(90 * DEG, UP), -5),
+            (rotation_matrix_transpose(30 * DEG, DOWN), -2),
+            (rotation_matrix_transpose(120 * DEG, LEFT), 3),
+            (rotation, -1),
+        ]
+        for new_rot, offset in new_params:
+            new_field = self.get_spherical_field(
+                axes, lambda ps: twirl_func(ps, offset), rotation=new_rot
+            )
+            self.play(Transform(field, new_field, run_time=2))
+
+        self.play(
+            offset_tracker.animate.set_value(-3),
+            UpdateFromFunc(
+                field,
+                lambda m: m.become(
+                    self.get_spherical_field(axes, lambda ps: twirl_func(ps, offset_tracker.get_value()), rotation=rotation)
+                )
+            ),
+            run_time=4
+        )
+
+        # Show some flow
+        streamlines = self.get_streamlines(field, axes, radius)
+        self.add(streamlines)
+        self.wait(8)
+
+        # New field
+        field2 = self.get_spherical_field(axes, source_and_sink)
+        streamlines2 = self.get_streamlines(field2, axes, radius, density=100)
+
+        self.play(FadeOut(streamlines))
+        self.play(Transform(field, field2))
+        self.play(FadeIn(streamlines2))
+        self.wait(8)
+
+    def get_streamlines(self, field, axes, radius, density=100):
+        streamlines = SphereStreamLines(
+            lambda p: field.func(np.array(p).reshape(-1, 3)).flatten(), axes,
+            density=density,
+            solution_time=1.0,
+            dt=0.05,
+        )
+        streamlines.scale(radius, about_point=ORIGIN)
+        streamlines.set_stroke(WHITE, 1, 0.5)
+        animated_lines = AnimatedStreamLines(streamlines, rate_multiple=0.2)
+        animated_lines.apply_depth_test()
+        return animated_lines
+
+    def get_spherical_field(
+        self,
+        axes,
+        plane_func,
+        n_sample_points=2000,
+        stroke_width=2,
+        rotation=np.identity(3),
+    ):
+        def v_func(points3d):
+            rot_points = np.dot(points3d, rotation)
+            new_points = stereographic_vector_field(rot_points, plane_func)
+            norms = np.linalg.norm(new_points, axis=1)
+            new_points *= 1.0 / norms[:, np.newaxis]
+            new_points = np.dot(new_points, rotation.T)
+            return new_points
+
+        sample_points = fibonacci_sphere(n_sample_points)
+        field = get_sphereical_vector_field(
+            v_func, axes, sample_points,
+            stroke_width=stroke_width
+        )
+        field.set_flat_stroke(False)
+
+        return field
+
+
+class AskAboutOutside(InteractiveScene):
+    def construct(self):
+        # Set up
+        frame = self.frame
+        radius = 2
+        axes = ThreeDAxes().scale(radius)
+        axes.set_stroke(WHITE, 1, 0.5)
+        axes.set_flat_stroke(False)
+        axes.set_z_index(1)
+
+        def sphere_uv(u, v):
+            return [math.cos(u) * math.sin(v), math.sin(u) * math.sin(v), -math.cos(v)]
+
+        sphere_group = self.get_warped_sphere_group(sphere_uv)
+        sphere, mesh = sphere_group
+
+        frame.reorient(-6, 70, 0)
+        self.add(sphere, mesh, axes)
+
+        # Show a character on the surface
+        morty = Mortimer(mode="confused", height=0.1).flip()
+        mirror_morty = morty.copy().flip(axis=RIGHT, about_edge=DOWN)
+        mirror_morty.fade(0.5)
+        out_arrow = Vector(0.15 * UP, thickness=0.5)
+        out_arrow.next_to(morty, LEFT, buff=0.025, aligned_edge=DOWN)
+        in_arrow = out_arrow.copy().flip(axis=RIGHT, about_edge=DOWN)
+        out_arrow.set_color(BLUE)
+        in_arrow.set_color(RED)
+        morty_group = VGroup(morty, mirror_morty, out_arrow, in_arrow)
+
+        morty_group.rotate(90 * DEG, RIGHT)
+        morty_group.move_to(sphere.get_zenith())
+        morty_group.rotate(30 * DEG, axis=UP, about_point=ORIGIN)
+
+        sphere.set_clip_plane(UP, 2)
+
+        self.play(
+            FadeIn(morty, time_span=(0, 1)),
+            sphere.animate.set_opacity(0.25),
+            frame.animate.reorient(-5, 83, 0, (1.09, 0.51, 1.62), 1.15),
+            run_time=3
+        )
+        self.play(GrowArrow(out_arrow))
+        self.wait()
+        self.play(
+            TransformFromCopy(morty, mirror_morty),
+            GrowArrow(in_arrow)
+        )
+        self.wait()
+
+        # Show obvious outside and inside
+        out_arrows, in_arrows = all_arrows = VGroup(
+            VGroup(
+                Arrow(radius * a1 * point, radius * a2 * point, fill_color=color, thickness=4, buff=0)
+                for point in compass_directions(24)
+            )
+            for a1, a2, color in [(1.1, 1.5, BLUE), (0.9, 0.7, RED)]
+        )
+        all_arrows.rotate(90 * DEG, RIGHT, about_point=ORIGIN)
+
+        self.play(
+            frame.animate.reorient(-4, 82, 0, (0.15, -0.01, 0.02), 8.08),
+            LaggedStartMap(GrowArrow, out_arrows, lag_ratio=0.01, time_span=(3, 6)),
+            run_time=6
+        )
+        self.wait()
+        self.play(
+            FadeOut(out_arrows),
+            FadeOut(morty_group),
+            sphere.animate.set_opacity(1)
+        )
+
+        # Warp the sphere
+        def twist_sphere_uv(u, v):
+            return [math.cos(u + v - 0.5) * math.sin(v), math.sin(u + v - 0.5) * math.sin(v), -math.cos(v)]
+
+        def squish_sphere_uv(u, v):
+            x, y, z = twist_sphere_uv(u, v)
+            dist = math.sqrt(x**2 + y**2)
+            z *= -35 * (dist - 0.25) * (dist - 0.75) * (dist - 0) * (dist - 1.1)
+            return (x, y, z)
+
+        twisted_sphere = self.get_warped_sphere_group(twist_sphere_uv)
+        squish_sphere = self.get_warped_sphere_group(squish_sphere_uv)
+
+        self.play(
+            Transform(sphere_group, twisted_sphere),
+            frame.animate.reorient(-1, 73, 0, (-0.23, 0.06, -0.09), 6.00),
+            run_time=5
+        )
+        self.play(
+            frame.animate.reorient(12, 73, 0, (-0.09, 0.1, -0.06), 4.71),
+            Transform(sphere_group, squish_sphere),
+            run_time=5
+        )
+
+        # Example point
+        index = 9200
+        point = sphere.get_points()[index]
+        normal = normalize(sphere.data["d_normal_point"][index] - point)
+        dot = TrueDot(point, color=YELLOW)
+        dot.make_3d()
+        dot.deactivate_depth_test()
+        dot.set_radius(0.01)
+        dot.set_z_index(1)
+
+        in_vect, out_vect = vects = VGroup(
+            Vector(sign * 0.2 * normal, thickness=0.5, fill_color=color).shift(point)
+            for sign, color in zip([1, -1], [RED, BLUE])
+        )
+        for vect in vects:
+            vect.set_perpendicular_to_camera(frame)
+
+        self.add(dot)
+        self.play(
+            FadeIn(dot),
+            frame.animate.reorient(-47, 81, 0, (-0.55, 0.17, 0.13), 0.65),
+            run_time=3
+        )
+        self.play(GrowArrow(in_vect))
+        self.play(GrowArrow(out_vect))
+        self.wait()
+
+        # Show a homotopy
+        def homotopy(x, y, z, t):
+            alpha = clip((x + 3) / 6 - 1 + 2 * t, 0, 1)
+            shift = wiggle(alpha, 3)
+            return (x, y, z + 0.35 * shift)
+
+        self.play(
+            FadeOut(vects, time_span=(0, 1)),
+            FadeOut(dot, time_span=(0, 1)),
+            Homotopy(homotopy, sphere_group),
+            frame.animate.reorient(-44, 78, 0, (-0.16, 0.02, 0.31), 4.18),
+            run_time=6,
+        )
+
+
+    def get_warped_sphere_group(self, uv_func, radius=2, mesh_resolution=(61, 31), u_range=(0, TAU), v_range=(0, PI)):
+        surface = ParametricSurface(uv_func, u_range=u_range, v_range=v_range, resolution=(201, 101))
+        surface.always_sort_to_camera(self.camera)
+        surface.set_color(GREY_D)
+        mesh = SurfaceMesh(surface, resolution=mesh_resolution, normal_nudge=0)
+        mesh.set_stroke(WHITE, 0.5, 0.25)
+        mesh.deactivate_depth_test()
+        result = Group(surface, mesh)
+        result.scale(radius, about_point=ORIGIN)
+        return result
 
 
 class InsideOut(InteractiveScene):
@@ -879,6 +1228,31 @@ class InsideOut(InteractiveScene):
         self.play(frame.animate.reorient(-48, 93, 0), run_time=3)
         self.wait()
 
+        # Add normal vectors
+        uv_samples = np.array([
+            [(u + v) % TAU, v]
+            for v in np.linspace(0.75 * PI, 0.95 * PI, 10)
+            for u in np.linspace(0, TAU, 20)
+        ])
+        normal_vectors = VGroup(
+            VMobject().set_points_as_corners([ORIGIN, RIGHT, RIGHT, 2 * RIGHT])
+            for sample in uv_samples
+        )
+        for vect in normal_vectors:
+            vect.set_stroke(BLUE_B, width=[1, 1, 1, 6, 3, 0], opacity=0.5)
+        normal_vectors.apply_depth_test()
+
+        def update_normal_vectors(normal_vectors):
+            points = np.array([cap[0].uv_to_point(u, v) for u, v in uv_samples])
+            du_points = np.array([cap[0].uv_to_point(u + 0.1, v) for u, v in uv_samples])
+            dv_points = np.array([cap[0].uv_to_point(u, v + 0.1) for u, v in uv_samples])
+            normals = normalize_along_axis(np.cross(du_points - points, dv_points - points), 1)
+            for point, normal, vector in zip(points, normals, normal_vectors):
+                vector.put_start_and_end_on(point, point + 0.3 * normal)
+
+        update_normal_vectors(normal_vectors)
+        self.play(FadeIn(normal_vectors))
+
         # Show transition to antipode
         anti_cap = cap.copy().rotate(PI, axis=OUT, about_point=ORIGIN).stretch(-1, 2, about_point=ORIGIN)
         anti_cap[0].shift(1e-2 * OUT)
@@ -917,6 +1291,7 @@ class InsideOut(InteractiveScene):
             run_time=4,
         )
         self.wait()
+        normal_vectors.add_updater(update_normal_vectors)
         self.play(
             Write(rot_arcs, lag_ratio=0, run_time=1),
             Rotate(cap, PI, axis=OUT, run_time=3, about_point=ORIGIN),
@@ -978,41 +1353,85 @@ class InsideOut(InteractiveScene):
         self.play(frame.animate.reorient(-124, 77, 0), run_time=10)
 
 
+class UnitNormals(InteractiveScene):
+    def construct(self):
+        # Test
+        frame = self.frame
+        surface = Torus()
+        surface.set_color(GREY_D)
+
+        uv_samples = np.array([
+            [u, v]
+            for v in np.linspace(0, TAU, 25)
+            for u in np.linspace(0, TAU, 50)
+        ])
+        points = np.array([surface.uv_to_point(u, v) for u, v in uv_samples])
+        uv_samples = uv_samples[np.argsort(points[:, 0])]
+
+        normal_vectors = VGroup(
+            VMobject().set_points_as_corners([ORIGIN, RIGHT, RIGHT, 2 * RIGHT])
+            for sample in uv_samples
+        )
+        for vect in normal_vectors:
+            vect.set_stroke(BLUE_D, width=[2, 2, 2, 12, 6, 0], opacity=0.5)
+        normal_vectors.set_stroke(WHITE)
+        normal_vectors.apply_depth_test()
+        normal_vectors.set_flat_stroke(False)
+
+        def update_normal_vectors(normal_vectors):
+            points = np.array([surface.uv_to_point(u, v) for u, v in uv_samples])
+            du_points = np.array([surface.uv_to_point(u + 0.1, v) for u, v in uv_samples])
+            dv_points = np.array([surface.uv_to_point(u, v + 0.1) for u, v in uv_samples])
+            normals = normalize_along_axis(np.cross(du_points - points, dv_points - points), 1)
+            for point, normal, vector in zip(points, normals, normal_vectors):
+                vector.put_start_and_end_on(point, point + 0.5 * normal)
+
+        update_normal_vectors(normal_vectors)
+
+        frame.reorient(51, 57, 0, (0.39, 0.01, -0.5), 8.00)
+        frame.add_ambient_rotation(5 * DEG)
+        self.add(surface)
+        self.add(normal_vectors)
+        self.play(ShowCreation(normal_vectors, run_time=3))
+        self.wait(6)
+
+
 class DefineOrientation(InsideOut):
     def construct(self):
-        # Latitude and Longetude
+        # Latitude and Longitude
         frame = self.frame
         radius = 3
         sphere = Sphere(radius=radius)
         sphere.set_color(GREY_E, 1)
         earth = TexturedSurface(sphere, "EarthTextureMap", "NightEarthTextureMap")
         earth.set_opacity(0.5)
-        mesh = SurfaceMesh(sphere, resolution=(61, 31))
+        mesh = SurfaceMesh(sphere, resolution=(73, 37))
         mesh.set_stroke(WHITE, 1, 0.25)
 
         uv_tracker = ValueTracker(np.array([180 * DEG, 90 * DEG]))
+
         dot = TrueDot()
         dot.set_color(YELLOW)
         dot.add_updater(lambda m: m.move_to(sphere.uv_func(*uv_tracker.get_value())))
         dot.set_z_index(2)
 
-        lat_label, lon_label = labels = VGroup(
+        lat_label, lon_label = lat_lon_labels = VGroup(
             Tex(R"\text{Lat: }\, 10^\circ"),
             Tex(R"\text{Lon: }\, 10^\circ"),
         )
-        labels.arrange(DOWN, aligned_edge=LEFT)
-        labels.fix_in_frame()
-        labels.to_corner(UL)
+        lat_lon_labels.arrange(DOWN, aligned_edge=LEFT)
+        lat_lon_labels.fix_in_frame()
+        lat_lon_labels.to_corner(UL)
         lat_label.make_number_changeable("10", edge_to_fix=RIGHT).add_updater(
-            lambda m: m.set_value(np.round((uv_tracker.get_value()[1] - 90 * DEG) / DEG))
+            lambda m: m.set_value(np.round(self.get_lat_lon(*uv_tracker.get_value())[0]))
         )
         lon_label.make_number_changeable("10", edge_to_fix=RIGHT).add_updater(
-            lambda m: m.set_value(np.round((uv_tracker.get_value()[0] - 180 * DEG) / DEG))
+            lambda m: m.set_value(np.round(self.get_lat_lon(*uv_tracker.get_value())[1]))
         )
-        labels.add_updater(lambda m: m.fix_in_frame())
+        lat_lon_labels.add_updater(lambda m: m.fix_in_frame())
 
         self.add(sphere, mesh)
-        self.add(labels)
+        self.add(lat_lon_labels)
         frame.reorient(-66, 85, 0, (-0.06, 0.18, 0.06), 6.78)
         self.play(FadeIn(dot))
 
@@ -1023,8 +1442,60 @@ class DefineOrientation(InsideOut):
 
         lat_line = TracedPath(dot.get_center, stroke_color=TEAL)
         self.add(lat_line, dot)
-        self.play(uv_tracker.animate.increment_value([42 * DEG, 0]), run_time=4)
+        self.play(uv_tracker.animate.increment_value([45 * DEG, 0]), run_time=4)
         lat_line.suspend_updating()
+
+        # Add labels to all the points
+        u, v = uv_tracker.get_value()
+
+        label_template = Tex(R"(10^\circ, 10^\circ)", isolate=["10"])
+        label_template.set_backstroke(BLACK, 1)
+        lon_num_template, lat_num_template = label_template.make_number_changeable("10", replace_all=True)
+
+        def get_lat_lon_label(u, v, font_size=5):
+            lat, lon = self.get_lat_lon(u, v)
+            lat_num_template.set_value(np.round(lat))
+            lon_num_template.set_value(np.round(lon))
+            label = label_template.copy()
+            label.scale(font_size / 48)
+            label.move_to(sphere.get_zenith())
+            label.rotate(PI - v, axis=RIGHT, about_point=ORIGIN)
+            label.rotate(-270 * DEG + u, axis=OUT, about_point=ORIGIN)
+            return label
+
+        u_radius = 50 * DEG
+        v_radius = 30 * DEG
+        all_labels = VGroup(
+            get_lat_lon_label(sub_u, sub_v)
+            for sub_u in np.arange(u - u_radius, u + u_radius, 10 * DEG)
+            for sub_v in np.arange(v - v_radius, v + v_radius, 5 * DEG)
+        )
+        all_labels.sort(lambda p: get_norm(p - dot.get_center()))
+
+        self.play(
+            frame.animate.reorient(-39, 60, 0, (-0.64, 0.45, 0.06), 4.33),
+            run_time=3
+        )
+        self.play(
+            FadeIn(all_labels, lag_ratio=0.001, run_time=3),
+            dot.animate.set_opacity(0.25),
+        )
+        self.wait()
+
+        # Show some kind of warping
+        def homotopy(x, y, z, t):
+            alpha = clip((x + 3) / 6 - 1 + 2 * t, 0, 1)
+            shift = wiggle(alpha, 3)
+            return (x, y, z + 0.35 * shift)
+
+        dot.suspend_updating()
+        group = Group(sphere, mesh, lat_line, lon_line, dot, all_labels)
+
+        self.play(
+            Homotopy(homotopy, group, run_time=10)
+        )
+        dot.resume_updating()
+        self.wait()
 
         # Show tangent vectors
         u, v = uv_tracker.get_value()
@@ -1039,17 +1510,16 @@ class DefineOrientation(InsideOut):
         tangent_vects.set_z_index(1)
         tangent_vects.set_fill(opacity=0.8)
         for vect in tangent_vects:
-            vect.always.set_perpendicular_to_camera(frame)
+            vect.set_perpendicular_to_camera(frame)
 
         self.play(
-            frame.animate.reorient(-47, 60, 0, (-0.51, 0.42, 0.14), 4.33),
-            dot.animate.scale(0.5),
-            LaggedStartMap(GrowArrow, tangent_vects, lag_ratio=0.5),
-            run_time=3
+            dot.animate.set_opacity(1).scale(0.5),
+            all_labels.animate.set_stroke(width=0).set_fill(opacity=0.25),
         )
-        tangent_vects.clear_updaters()
+        self.wait()
 
-        lat_line2 = TracedPath(dot.get_center, stroke_color=TEAL)
+        lat_line2 = TracedPath(dot.get_center, stroke_color=TEAL, stroke_width=1)
+        lat_line2.set_scale_stroke_with_zoom(True)
         self.add(lat_line2)
         self.play(
             uv_tracker.animate.increment_value([30 * DEG, 0]).set_anim_args(rate_func=wiggle),
@@ -1057,16 +1527,22 @@ class DefineOrientation(InsideOut):
             run_time=3
         )
         lat_line2.clear_updaters()
+        self.play(GrowArrow(tangent_vects[0]))
         self.wait()
 
-        lon_line2 = TracedPath(dot.get_center, stroke_color=RED)
-        self.add(lon_line2, tangent_vects)
+        lon_line2 = TracedPath(dot.get_center, stroke_color=RED, stroke_width=1)
+        lon_line2.set_scale_stroke_with_zoom(True)
+        self.add(lon_line2)
         self.play(
+            tangent_vects[0].animate.set_fill(opacity=0.5).set_anim_args(time_span=(0, 1)),
             uv_tracker.animate.increment_value([0, 30 * DEG]).set_anim_args(rate_func=wiggle),
             FadeOut(lat_line),
             run_time=3
         )
         lon_line2.clear_updaters()
+        self.play(GrowArrow(tangent_vects[1]))
+        self.play(tangent_vects.animate.set_fill(opacity=1))
+        self.wait()
 
         # Show normal vector
         normal_vect = Arrow(
@@ -1078,9 +1554,9 @@ class DefineOrientation(InsideOut):
         normal_vect.rotate(90 * DEG, axis=normal_vect.get_vector())
 
         self.play(
-            GrowArrow(normal_vect, time_span=(0, 2)),
-            FadeOut(labels, time_span=(0, 2)),
-            frame.animate.reorient(-103, 63, 0, (-0.12, -0.36, 0.43), 4.75),
+            GrowArrow(normal_vect, time_span=(2, 4)),
+            FadeOut(lat_lon_labels, time_span=(0, 2)),
+            frame.animate.reorient(-96, 54, 0, (-0.23, -1.08, 0.25), 3.67),
             run_time=8
         )
 
@@ -1099,15 +1575,76 @@ class DefineOrientation(InsideOut):
         normal_field.set_stroke(width=1e-6)
 
         self.play(
-            Restore(normal_field),
+            Restore(normal_field, time_span=(2, 5)),
             frame.animate.reorient(-103, 62, 0, (-0.09, 0.25, 0.23), 7.26),
+            run_time=10
+        )
+        self.wait()
+        self.add(self.camera.light_source)
+
+        # Move around light
+        light = GlowDot(radius=0.5, color=WHITE)
+        light.move_to(self.camera.light_source)
+        light.save_state()
+        self.camera.light_source.always.move_to(light)
+
+        self.add(self.camera.light_source)
+        self.play(
+            light.animate.move_to(4 * normalize(light.get_center())),
             run_time=3
+        )
+        self.play(Rotate(light, TAU, axis=OUT, about_point=ORIGIN, run_time=6))
+        self.play(
+            FadeOut(normal_field),
+            FadeOut(normal_vect),
+            Restore(light),
+            all_labels.animate.set_fill(opacity=0.5),
+            frame.animate.reorient(-63, 66, 0, (-0.09, 0.25, 0.23), 7.26),
+            run_time=3
+        )
+
+        # Warp sphere
+        dot.suspend_updating()
+        group = Group(sphere, mesh, lat_line2, lon_line2, all_labels, tangent_vects, dot)
+        group.save_state()
+        group.target = group.generate_target()
+        group.target.rotate(-45 * DEG)
+        group.target.scale(0.5)
+        group.target.stretch(0.25, 0)
+        group.target.shift(RIGHT)
+        group.target.apply_complex_function(lambda z: z**3)
+        group.target.center()
+        group.target.set_height(6)
+        group.target.rotate(45 * DEG)
+
+        self.play(Homotopy(homotopy, group, run_time=3))
+        self.play(
+            MoveToTarget(group),
+            frame.animate.reorient(-94, 60, 0, (0.5, 0.84, 0.91), 1.06),
+            run_time=8
+        )
+        self.wait()
+        self.play(MoveAlongPath(dot, lat_line2, run_time=5))
+        self.play(MoveAlongPath(dot, lon_line2, run_time=5))
+
+        new_normal_vector = Vector(
+            0.35 * normalize(np.cross(tangent_vects[0].get_vector(), tangent_vects[1].get_vector())),
+            fill_color=BLUE,
+            thickness=1
+        )
+        new_normal_vector.shift(tangent_vects[0].get_start())
+        new_normal_vector.set_perpendicular_to_camera(self.frame)
+        self.play(
+            GrowArrow(new_normal_vector),
+            frame.animate.reorient(-125, 52, 0, (0.5, 0.84, 0.91), 1.06),
+            run_time=2
         )
         self.wait()
         self.play(
-            FadeOut(normal_field),
-            FadeOut(sphere, scale=0.9),
-            VGroup(lat_line2, lon_line2).animate.set_stroke(width=1)
+            FadeOut(new_normal_vector, time_span=(0, 1)),
+            Restore(group),
+            frame.animate.reorient(-78, 66, 0, (-0.13, 0.12, 0.13), 6.54),
+            run_time=5
         )
 
         # Show antipode map
@@ -1122,6 +1659,15 @@ class DefineOrientation(InsideOut):
         antipode_lines.set_stroke(YELLOW, 1, 0.1)
 
         self.play(
+            FadeOut(sphere, scale=0.9),
+            FadeOut(all_labels),
+            VGroup(lat_line2, lon_line2).animate.set_stroke(width=1),
+            FadeIn(normal_vect),
+            frame.animate.reorient(-93, 55, 0, (-0.26, -0.85, 0.24), 4.27),
+            run_time=2
+        )
+
+        self.play(
             TransformFromCopy(group, anti_group),
             frame.animate.reorient(-194, 105, 0, (0.7, -0.22, -0.61), 4.64),
             ShowCreation(antipode_lines, lag_ratio=0),
@@ -1129,6 +1675,35 @@ class DefineOrientation(InsideOut):
         )
         self.play(antipode_lines.animate.set_stroke(opacity=0.02))
         self.wait()
+
+        # Map over labels
+        all_labels.set_fill(opacity=0.5)
+        anti_labels = all_labels.copy().scale(-1, min_scale_factor=-np.inf, about_point=ORIGIN)
+
+        for label in anti_labels:
+            label.rotate(PI, axis=np.cross(label.get_center(), IN))
+
+        self.play(FadeIn(all_labels, lag_ratio=0.001, run_time=3))
+        self.remove(all_labels)
+        self.play(TransformFromCopy(all_labels, anti_labels, lag_ratio=0.0002, run_time=3))
+        self.wait()
+        self.play(
+            MoveAlongPath(dot, anti_group[0], run_time=5),
+            anti_group[1].animate.set_stroke(opacity=0.25),
+            anti_group[2][1].animate.set_fill(opacity=0.25),
+        )
+        self.play(
+            MoveAlongPath(dot, anti_group[1], run_time=5),
+            anti_group[1].animate.set_stroke(opacity=1),
+            anti_group[2][1].animate.set_fill(opacity=1),
+            anti_group[0].animate.set_stroke(opacity=0.25),
+            anti_group[2][0].animate.set_fill(opacity=0.25),
+        )
+        self.wait()
+        self.play(
+            anti_group[0].animate.set_stroke(opacity=1),
+            anti_group[2][0].animate.set_fill(opacity=1),
+        )
 
         # New normal
         new_normal = normal_vect.copy()
@@ -1152,11 +1727,30 @@ class DefineOrientation(InsideOut):
             ])
         )
 
+        frame.reorient(162, 89, 0, (1.16, -0.3, -0.99), 4.64)
         self.play(
+            FadeOut(group),
+            FadeOut(antipode_lines),
             FadeIn(anti_normal_field, time_span=(0, 2)),
-            frame.animate.reorient(-167, 76, 0, (0.13, -1.02, -0.2), 8.43),
+            frame.animate.reorient(360 - 177, 82, 0, (-0.03, -0.11, 0.86), 9.51),
             run_time=10
         )
+
+        # Show outward vectors again
+        self.remove(anti_normal_field)
+        self.remove(anti_group)
+        self.remove(new_normal)
+        self.add(group)
+        self.add(normal_field)
+        antipode_lines.set_stroke(YELLOW, 1, 0.1)
+        self.play(ShowCreation(antipode_lines, lag_ratio=0, run_time=2))
+        self.wait()
+
+    def get_lat_lon(self, u, v):
+        return np.array([
+            v / DEG - 90,
+            u / DEG - 180,
+        ])
 
 
 class FlowingWater(InteractiveScene):
@@ -1171,11 +1765,23 @@ class FlowingWater(InteractiveScene):
         self.add(axes)
 
         # Add water
-        water = self.get_water(sigma0=0.2, n_droplets=250_000, opacity=0.1)
+        water = self.get_water(sigma0=0.2, n_droplets=1_000_000, opacity=0.1, refresh_ratio=0.015)
+        water.scale(0.01, about_point=ORIGIN)
         source_dot = GlowDot(ORIGIN, color=BLUE)
 
         self.add(source_dot, water)
-        self.wait(10)
+        water.refresh_sigma_tracker.set_value(0.2)
+        water.opacity_tracker.set_value(0.05)
+        water.radius_tracker.set_value(0.015)
+        frame.reorient(-108, 73, 0, (0.01, 0.06, -0.03), 4.0),
+        self.play(
+            water.radius_tracker.animate.set_value(0.02),
+            water.opacity_tracker.animate.set_value(0.1),
+            water.refresh_sigma_tracker.animate.set_value(2.5),
+            frame.animate.reorient(-120, 80, 0, ORIGIN, 8.00),
+            run_time=10
+        )
+        self.wait(20)
 
         # Show full sphere
         sphere = Sphere(radius=radius)
@@ -1205,9 +1811,11 @@ class FlowingWater(InteractiveScene):
         self.play(
             ShowCreation(sphere),
             Write(mesh, lag_ratio=1e-3),
+            run_time=2
         )
+        self.wait(2)
         self.play(FadeIn(normal_field))
-        self.wait(5)
+        self.wait(7.2)
 
         # Show single patch
         u_range_params = (0 * DEG, 15 * DEG, 5 * DEG)
@@ -1228,19 +1836,21 @@ class FlowingWater(InteractiveScene):
             FadeIn(patch_normals, time_span=(0, 1)),
             mesh.animate.set_stroke(opacity=0.1),
             frame.animate.reorient(19, 55, 0, (1.65, 0.28, 0.98), 2.32),
-            water.opacity_tracker.animate.set_value(0.1),
+            water.opacity_tracker.animate.set_value(0.125),
             water.radius_tracker.animate.set_value(0.01),
             run_time=5
         )
         frame.clear_updaters()
-        self.wait(7.5)
+        self.wait(8)
 
         patch_group = Group(patch, patch_normals)
+
+        # Original patch behavior
         self.play(
             Rotate(patch_group, PI, axis=UP),
             run_time=2
         )
-        self.wait(1)
+        self.wait(2.5)
         self.play(
             Rotate(patch_group, PI, axis=UP, time_span=(0, 1)),
             FadeIn(sphere),
@@ -1252,61 +1862,43 @@ class FlowingWater(InteractiveScene):
         )
         self.play(FadeOut(patch_group))
         frame.add_ambient_rotation(-1 * DEG)
-        self.wait(20)
-        self.play(FadeOut(normal_field))
+        self.wait(3)
+        self.play(
+            FadeOut(normal_field),
+            sphere.animate.set_shading(1, 1, 1),
+        )
+        self.wait(5)
 
         # Show deformations
-        sphere.always_sort_to_camera(self.camera)
         sphere_group = Group(sphere, mesh)
 
-        def random_deformation(points, seed=0):
-            random.seed(seed)
-            x, y, z = points.T
-            wiggle_size = 1.0
-            max_freq = 4
-            z += wiggle_size * random.random() * np.cos(max_freq * random.random() * x)
-            x += wiggle_size * random.random() * np.cos(max_freq * random.random() * y)
-            y += wiggle_size * random.random() * np.cos(max_freq * random.random() * z)
-
-            return np.array([x, y, z]).T
-
-        sphere_group_bases = [
-            sphere_group.copy(),
-            sphere_group.copy().apply_points_function(random_deformation),
-            sphere_group.copy().apply_points_function(lambda p: random_deformation(p, seed=1)),
-        ]
-
-        sphere_group.time = 0
-
-        center_tracker = Point()
-
-        def update_sphere_group(sphere_group, dt):
-            alpha1 = np.sin(0.5 * sphere_group.time)**2
-            alpha2 = np.sin(0.87 * sphere_group.time)**2
-            mob_tups = zip(
-                sphere_group.family_members_with_points(),
-                sphere_group_bases[0].family_members_with_points(),
-                sphere_group_bases[1].family_members_with_points(),
-                sphere_group_bases[2].family_members_with_points(),
+        def alt_uv_func(u, v, params, wiggle_size=1.0, max_freq=4):
+            x, y, z = sphere.uv_func(u, v)
+            return (
+                x + wiggle_size * params[0] * np.cos(max_freq * params[1] * y),
+                y + wiggle_size * params[4] * np.cos(max_freq * params[5] * z),
+                z + wiggle_size * params[2] * np.cos(max_freq * params[3] * x),
             )
-            for m0, m1, m2, m3 in mob_tups:
-                ps = interpolate(m1.get_points(), m2.get_points(), alpha1)
-                ps = interpolate(ps, m3.get_points(), alpha2)
-                m0.set_points(ps)
-            sphere_group.move_to(center_tracker)
-            sphere_group.time += dt
-            return sphere_group
 
-        sphere_group.add_updater(update_sphere_group)
+        np.random.seed(3)
+        for n in range(20):
+            params = np.random.random(6)
+            new_sphere = ParametricSurface(
+                lambda u, v: alt_uv_func(u, v, params),
+                u_range=sphere.u_range,
+                v_range=sphere.v_range,
+                resolution=sphere.resolution
+            )
+            new_sphere.match_style(sphere)
+            new_mesh = SurfaceMesh(new_sphere, resolution=mesh.resolution)
+            new_mesh.match_style(mesh)
+            new_group = Group(new_sphere, new_mesh)
 
-        self.add(sphere_group)
-        self.wait(8)
-        self.play(
-            center_tracker.animate.shift(1.75 * radius * RIGHT),
-            run_time=6,
-            rate_func=there_and_back_with_pause,
-        )
-        self.wait(16)
+            if 10 < n < 13:
+                new_group.shift(1.75 * radius * RIGHT)
+
+            self.play(Transform(sphere_group, new_group, run_time=2))
+            self.wait(2)
 
     def get_water(
         self,
@@ -1314,7 +1906,7 @@ class FlowingWater(InteractiveScene):
         radius=0.02,
         opacity=0.2,
         sigma0=3,
-        refresh_sigma=0.5,
+        refresh_sigma=2.5,
         velocity=10,
         refresh_ratio=0.01,
     ):
@@ -1324,6 +1916,7 @@ class FlowingWater(InteractiveScene):
         water.set_color(BLUE)
         water.opacity_tracker = ValueTracker(opacity)
         water.radius_tracker = ValueTracker(radius)
+        water.refresh_sigma_tracker = ValueTracker(refresh_sigma)
         water.velocity = velocity
 
         def flow_out(water, dt):
@@ -1338,7 +1931,7 @@ class FlowingWater(InteractiveScene):
 
             n_refreshes = int(refresh_ratio * len(points))
             indices = np.random.randint(0, len(points), n_refreshes)
-            new_points[indices] = np.random.normal(0, refresh_sigma, (n_refreshes, 3))
+            new_points[indices] = np.random.normal(0, water.refresh_sigma_tracker.get_value(), (n_refreshes, 3))
             water.set_points(new_points)
             water.set_opacity(water.opacity_tracker.get_value() / np.clip(radii, 1, np.inf))
             water.set_radius(water.radius_tracker.get_value())
@@ -1347,6 +1940,23 @@ class FlowingWater(InteractiveScene):
         water.add_updater(flow_out)
 
         return water
+
+    def rotate_patch(self):
+        # to be inserted in "show single patch" above
+        patch_group.clear_updaters()
+        point = patch.get_center()
+        path = Arc(0, PI)
+        path.rotate(20 * DEG, RIGHT)
+        path.put_start_and_end_on(point, -point)
+
+        patch_group.move_to(path.get_start())
+        self.wait(5)
+        self.play(
+            MoveAlongPath(patch_group, path),
+            frame.animate.reorient(-25, 92, 0, (-0.75, -0.96, -0.16), 3.16),
+            run_time=5
+        )
+        self.wait(5)
 
 
 class SurfaceFoldedOverSelf(FlowingWater):
@@ -1514,38 +2124,71 @@ class InsideOutWithNormalField(InteractiveScene):
         self.wait(3)
 
 
-
-class SurfaceTestForSenia(InteractiveScene):
+class ProjectedCombedHypersphere(InteractiveScene):
     def construct(self):
-        # Test
-        axes = ThreeDAxes()
-
-        time_tracker = ValueTracker(0)
-
-        def get_surface(t):
-            return ParametricSurface(
-                lambda u, v: spherical_eversion(u, v, t),
-                u_range=(0, 2 * PI),
-                v_range=(0.1, PI),
-                resolution=(25, 25),
-            )
-
-        def update_surface(surface):
-            surface.match_points(get_surface(time_tracker.get_value()))
-
-        surface = TexturedSurface(get_surface(0), "Tower2")
-
-        self.frame.reorient(-3, 60, 0, (-0.02, 0.05, 0.09), 4.26)  # Use shift-D to copy frame state
+        # Set up
+        frame = self.frame
+        axes = ThreeDAxes((-5, 5), (-5, 5), (-5, 5))
+        plane = NumberPlane((-5, 5), (-5, 5))
+        plane.background_lines.set_stroke(BLUE, 1)
+        plane.faded_lines.set_stroke(BLUE, 0.5, 0.5)
+        frame.reorient(86, 78, 0, (-0.13, 0.04, 0.63))
         self.add(axes)
-        self.add(surface)
-        self.play(
-            time_tracker.animate.set_value(1).set_anim_args(rate_func=linear),
-            UpdateFromFunc(surface, update_surface),
-            run_time=20,
-        )
-        self.wait()
 
-        self.play(
-            ShowCreation(surface),
-            self.frame.animate.reorient(41, 70, 0, (-0.17, 0.22, 0.06), 5.33)
+        # Add lines
+        flow_lines = VGroup(
+            self.get_flow_line_from_point(normalize(np.random.normal(0, 1, 4)))
+            for n in range(2000)
         )
+        for line in flow_lines:
+            line.virtual_time = TAU
+            line.get_center()
+            stroke_width = clip(get_norm(line.get_center()), 0, 3)
+            color = random_bright_color(hue_range=(0.45, 0.55))
+            line.set_stroke(color, stroke_width)
+
+        self.add(flow_lines)
+
+        frame.add_ambient_rotation(4 * DEG)
+        self.play(
+            LaggedStartMap(
+                VShowPassingFlash,
+                flow_lines,
+                lag_ratio=3 / len(flow_lines),
+                run_time=45,
+                time_width=0.7,
+                rate_func=linear
+            )
+        )
+
+    def get_flow_line_from_point(self, point4d, stroke_color=WHITE, stroke_width=2):
+        points4d = self.get_hypersphere_circle_points(point4d)
+        points3d = self.streo_4d_to_3d(points4d)
+        line = VMobject().set_points_smoothly(points3d)
+        line.set_stroke(stroke_color, stroke_width)
+        return line
+
+    def get_hypersphere_circle_points(self, point4d, n_samples=100):
+        x, y, z, w = point4d
+        perp = np.array([-y, x, -w, z])
+        return np.array([
+            math.cos(a) * point4d + math.sin(a) * perp
+            for a in np.linspace(0, TAU, n_samples)
+        ])
+
+    def streo_4d_to_3d(self, points4d):
+        xyz = points4d[:, :3]
+        w = points4d[:, 3]
+
+        # Stereographic projection formula: (x, y, z) / (1 - w)
+        # Reshape w for broadcasting
+        denominator = (1 - w).reshape(-1, 1)
+
+        # Handle potential division by zero (north pole)
+        # Add small epsilon to avoid exact division by zero
+        epsilon = 1e-10
+        denominator = np.where(np.abs(denominator) < epsilon, epsilon, denominator)
+
+        projected = xyz / denominator
+
+        return projected
